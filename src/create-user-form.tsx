@@ -1,34 +1,64 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useReducer } from 'react';
 import type { CSSProperties, Dispatch, SetStateAction } from 'react';
 
 interface CreateUserFormProps {
   setUserWasCreated: Dispatch<SetStateAction<boolean>>;
 }
 
+type State = {
+  username: string;
+  password: string;
+  criteriaErrors: string[];
+  apiError: string;
+  passwordTouched: boolean;
+};
+
+type Action =
+  | { type: 'SET_USERNAME'; payload: string }
+  | { type: 'SET_PASSWORD'; payload: string }
+  | { type: 'SET_CRITERIA_ERRORS'; payload: string[] }
+  | { type: 'SET_API_ERROR'; payload: string }
+  | { type: 'SET_PASSWORD_TOUCHED'; payload: boolean };
+
+const initialState: State = {
+  username: '',
+  password: '',
+  criteriaErrors: [],
+  apiError: '',
+  passwordTouched: false,
+};
+
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case 'SET_USERNAME':
+      return { ...state, username: action.payload };
+    case 'SET_PASSWORD':
+      return { ...state, password: action.payload };
+    case 'SET_CRITERIA_ERRORS':
+      return { ...state, criteriaErrors: action.payload };
+    case 'SET_API_ERROR':
+      return { ...state, apiError: action.payload };
+    case 'SET_PASSWORD_TOUCHED':
+      return { ...state, passwordTouched: action.payload };
+    default:
+      return state;
+  }
+}
+
 const urlSignUp: string = 'https://api.challenge.hennge.com/password-validation-challenge-api/001/challenge-signup';
 const authToken: string = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOlsib3hrYXI5OTFAaG90bWFpbC5jb20iXSwiaXNzIjoiaGVubmdlLWFkbWlzc2lvbi1jaGFsbGVuZ2UiLCJzdWIiOiJjaGFsbGVuZ2UifQ.cGTUOgp0ayc4g_AMzuM4n6pSrDQ8fmMVqN5FNo9eRrk';
 
-
 function CreateUserForm({ setUserWasCreated }: CreateUserFormProps) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [apiError, setApiError] = useState('');
-  const [criteriaErrors, setCriteriaErrors] = useState<string[]>([]);
-  const [passwordTouched, setPasswordTouched] = useState(false);
-  const [debouncedPassword, setDebouncedPassword] = useState(password);
+  const [state, dispatch] = useReducer(reducer, initialState);
+  const { username, password, criteriaErrors, apiError, passwordTouched } = state;
 
   useEffect(() => {
     const handler = setTimeout(() => {
-      setDebouncedPassword(password);
+      if (passwordTouched) validatePassword(password);
     }, 400);
 
     return () => clearTimeout(handler);
-  }, [password]);
-
-  useEffect(() => {
-    if (!passwordTouched) return;
-    validatePassword(debouncedPassword);
-  }, [debouncedPassword]);
+  }, [password, passwordTouched]);
 
   const validatePassword = (pwd: string): boolean => {
     const errors: string[] = [];
@@ -40,30 +70,28 @@ function CreateUserForm({ setUserWasCreated }: CreateUserFormProps) {
     if (!/[A-Z]/.test(pwd)) errors.push('Password must contain at least one uppercase letter');
     if (!/[a-z]/.test(pwd)) errors.push('Password must contain at least one lowercase letter');
 
-    setCriteriaErrors(errors);
+    dispatch({ type: 'SET_CRITERIA_ERRORS', payload: errors });
     return errors.length === 0;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setApiError('');
-    setCriteriaErrors([]);
+    dispatch({ type: 'SET_API_ERROR', payload: '' });
+    dispatch({ type: 'SET_CRITERIA_ERRORS', payload: [] });
 
     const isPasswordValid = validatePassword(password);
 
     if (!username || !isPasswordValid) return;
 
     try {
-      const res = await fetch(
-        urlSignUp, {
+      const res = await fetch(urlSignUp, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${authToken}`,
         },
         body: JSON.stringify({ username, password }),
-      }
-      );
+      });
 
       if (res.ok) {
         setUserWasCreated(true);
@@ -73,51 +101,51 @@ function CreateUserForm({ setUserWasCreated }: CreateUserFormProps) {
       const contentType = res.headers.get('content-type');
 
       if (res.status === 401 || res.status === 403) {
-        setApiError('Not authenticated to access this resource.');
+        dispatch({ type: 'SET_API_ERROR', payload: 'Not authenticated to access this resource.' });
       } else if (res.status === 400) {
-        setApiError('Something went wrong, please try again.');
+        dispatch({ type: 'SET_API_ERROR', payload: 'Something went wrong, please try again.' });
       } else if (res.status === 422 && contentType?.includes('application/json')) {
-        const data = await res.json();
-        const backendErrors: string[] = data.errors || [];
-
-        const mappedErrors = backendErrors.map((err) => {
-          switch (err) {
-            case 'too_short':
-              return 'Password must be at least 10 characters long';
-            case 'too_long':
-              return 'Password must be at most 24 characters long';
-            case 'no_whitespace':
-              return 'Password cannot contain spaces';
-            case 'missing_digits':
-              return 'Password must contain at least one number';
-            case 'missing_uppercase':
-              return 'Password must contain at least one uppercase letter';
-            case 'missing_lowercase':
-              return 'Password must contain at least one lowercase letter';
-            case 'not_allowed':
-              setApiError('Sorry, the entered password is not allowed, please try a different one.');
-              return null;
-            default:
-              return null;
-          }
-        }).filter(Boolean) as string[];
-
-        setCriteriaErrors(mappedErrors);
+        extractBackendErrors(res);
       } else {
-        setApiError('Something went wrong, please try again.');
+        dispatch({ type: 'SET_API_ERROR', payload: 'Something went wrong, please try again.' });
       }
     } catch (err) {
-      setApiError('Something went wrong, please try again.');
+      dispatch({ type: 'SET_API_ERROR', payload: 'Something went wrong, please try again.' });
     }
   };
 
+  const extractBackendErrors = async (res: Response) => {
+    const data = await res.json();
+    const backendErrors: string[] = data.errors || [];
 
+    const mappedErrors = backendErrors.map((err) => {
+      switch (err) {
+        case 'too_short':
+          return 'Password must be at least 10 characters long';
+        case 'too_long':
+          return 'Password must be at most 24 characters long';
+        case 'no_whitespace':
+          return 'Password cannot contain spaces';
+        case 'missing_digits':
+          return 'Password must contain at least one number';
+        case 'missing_uppercase':
+          return 'Password must contain at least one uppercase letter';
+        case 'missing_lowercase':
+          return 'Password must contain at least one lowercase letter';
+        case 'not_allowed':
+          dispatch({ type: 'SET_API_ERROR', payload: 'Sorry, the entered password is not allowed, please try a different one.' });
+          return null;
+        default:
+          return null;
+      }
+    }).filter(Boolean) as string[];
+
+    dispatch({ type: 'SET_CRITERIA_ERRORS', payload: mappedErrors });
+  }
 
   return (
     <div style={formWrapper}>
       <form style={form} onSubmit={handleSubmit} noValidate>
-        {/* make sure the username and password are submitted */}
-        {/* make sure the inputs have the accessible names of their labels */}
         <label htmlFor="username" style={formLabel}>Username</label>
         <input
           id="username"
@@ -126,7 +154,7 @@ function CreateUserForm({ setUserWasCreated }: CreateUserFormProps) {
           autoComplete="new-password"
           style={formInput}
           value={username}
-          onChange={(e) => setUsername(e.target.value)}
+          onChange={(e) => dispatch({ type: 'SET_USERNAME', payload: e.target.value })}
           aria-invalid={!username && apiError ? 'true' : 'false'}
         />
 
@@ -139,8 +167,8 @@ function CreateUserForm({ setUserWasCreated }: CreateUserFormProps) {
           style={formInput}
           value={password}
           onChange={(e) => {
-            setPassword(e.target.value);
-            if (!passwordTouched) setPasswordTouched(true);
+            dispatch({ type: 'SET_PASSWORD', payload: e.target.value });
+            if (!passwordTouched) dispatch({ type: 'SET_PASSWORD_TOUCHED', payload: true });
           }}
           aria-invalid={criteriaErrors.length > 0 ? 'true' : 'false'}
         />
